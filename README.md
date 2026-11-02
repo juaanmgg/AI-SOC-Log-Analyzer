@@ -22,7 +22,7 @@ Un sistema de Detección y Prevención de Intrusiones (IPS/IDS) impulsado por In
 
 ## ⚙️ Instalación
 
-    Clona el repositorio: git clone [https://github.com/TU_USUARIO/AI-SOC-Log-Analyzer.git](https://github.com/TU_USUARIO/AI-SOC-Log-Analyzer.git)
+    Clona el repositorio: git clone https://github.com/juaanmgg/AI-SOC-Log-Analyzer.git
 
     Descarga el modelo: ollama run llama3.1
 
