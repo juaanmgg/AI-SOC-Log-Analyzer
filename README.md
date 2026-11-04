@@ -1,55 +1,79 @@
 # 🛡️ Multi-Agent AI SOC Framework
 
-Un sistema avanzado de Detección y Prevención de Intrusiones (IPS/IDS) basado en una arquitectura Multi-Agente orquestada con **LangChain**. Analiza en tiempo real registros del sistema (SSH, Apache, Nginx), clasifica amenazas utilizando Inteligencia Artificial (Llama 3.1) y ejecuta contramedidas de bloqueo automatizadas (SOAR).
+![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)
+![Architecture](https://img.shields.io/badge/architecture-LangGraph-orange.svg)
+
+Un sistema avanzado de Detección y Prevención de Intrusiones (IPS/IDS) basado en una arquitectura Multi-Agente orquestada con **LangGraph**. Analiza en tiempo real registros del sistema (SSH, Apache, Nginx), clasifica amenazas utilizando Inteligencia Artificial (Llama 3.1) y ejecuta contramedidas de bloqueo automatizadas (SOAR) con mecanismos de rollback.
 
 ## 🚀 Características Principales
 
-* **Arquitectura LangChain:** Flujo de análisis avanzado que extrae contexto, clasifica el tipo de ataque y estructura la salida para la toma de decisiones automatizada.
-* **Motor LLM Híbrido:**
-* **Local (Ollama):** Máxima privacidad de datos (Data Privacy) procesando logs confidenciales 100% en local.
-* **Nube (Groq API):** Despliegue optimizado para entornos de bajos recursos (como Honeypots en VPS gratuitos de Azure/AWS) con latencia ultrabaja.
+* **Arquitectura de Grafos (LangGraph):** División lógica entre Agente Recolector (Parser), Agente Analista (LLM) y Agente Táctico (Executor).
+* **Motor LLM Híbrido:** Local (Ollama) para máxima privacidad, o Nube (Groq API) para despliegues en servidores de bajos recursos.
+* **SOAR con Rollback Inteligente (TTL):** Bloqueo dinámico en milisegundos a través de `netsh` (Windows) o `ufw` (Linux). Incluye un demonio en segundo plano que libera IPs automáticamente según un temporizador (ej. 24h) para evitar la saturación del firewall.
+* **Threat Intel estructurado (SQLite):** Enriquecimiento de datos con geolocalización IP en tiempo real y persistencia relacional.
+* **Seguridad en Producción:** Soporte nativo de *Whitelists* para evitar bloqueos accidentales de administradores o subredes internas.
 
+> **[📍 INSERTA AQUÍ UN GIF O SCREENSHOT MOSTRANDO TU TERMINAL BLOQUEANDO UN ATAQUE EN VIVO]**
 
-* **Inteligencia de Amenazas (Threat Intel):** Enriquecimiento de datos con geolocalización IP en tiempo real y persistencia de eventos en un registro CSV (preparado para integrarse con herramientas SIEM como Grafana o Splunk).
-* **Respuesta Autónoma (SOAR):** Bloqueo dinámico en milisegundos. Soporte multiplataforma nativo (`netsh` en Windows, `ufw` en Linux).
-* **Monitorización en Tiempo Real:** Análisis de logs en vivo (`tail -f`) con agrupamiento por lotes temporales para no saturar las llamadas al LLM.
+## 🧠 Arquitectura del Sistema
+
+```mermaid
+graph TD
+    A[Log de Sistema / auth.log] --> B(Agente 1: Recolector)
+    B -->|Lote de Anomalías| C{Agente 2: Analista LLM}
+    C -->|Falso Positivo| D[Ignorar]
+    C -->|Ataque Confirmado| E(Agente 3: Táctico / Executor)
+    E --> F{Comprobación Whitelist}
+    F -->|IP Segura| D
+    F -->|IP Hostil| G[Regla UFW / Netsh]
+    G --> H[(SQLite: Threat Intel)]
+    H --> I((Demonio TTL de Desbloqueo))
+    I -.->|Expira en 24h| G
+```
 
 ## 🛠️ Stack Tecnológico
 
-* **Core:** Python 3.10+
-* **IA & Orquestación:** LangChain, Ollama (Llama 3.1), Groq (Llama 3.1 8B)
-* **Infraestructura:** Integración con Firewall de SO (Windows/Linux) y APIs REST de Geolocalización.
+* **Core:** Python 3.10+, Docker, SQLite.
+* **IA & Orquestación:** LangChain, LangGraph, Ollama, Groq.
+* **Infraestructura:** Integración OS Firewall, CI/CD con GitHub Actions, Pytest.
 
-## ⚙️ Instalación
+## ⚙️ Instalación y Despliegue
 
-1. Clona este repositorio:
-`git clone https://github.com/juaanmgg/AI-SOC-Log-Analyzer.git`
-`cd AI-SOC-Log-Analyzer`
-2. (Opcional - Uso Local) Instala Ollama y descarga el modelo:
-`ollama run llama3.1`
-3. Configura el entorno e instala las dependencias:
-`python -m venv venv`
-`source venv/bin/activate` *(En Windows: `.\venv\Scripts\activate`)*
-`pip install -r requirements.txt`
+### Opción 1: Docker (Recomendado para Producción)
+```bash
+docker build -t ai-soc .
+docker run --privileged --network host -v /var/log/auth.log:/app/auth.log -v $(pwd)/threat_intel.db:/app/threat_intel.db ai-soc --log /app/auth.log --ai groq --groq-key "TU_API_KEY"
+```
+
+### Opción 2: Entorno Local
+1. Clona el repositorio e instala dependencias:
+```bash
+git clone [https://github.com/juaanmgg/AI-SOC-Log-Analyzer.git](https://github.com/juaanmgg/AI-SOC-Log-Analyzer.git)
+cd AI-SOC-Log-Analyzer
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+2. Crea tu archivo `whitelist.txt` y añade tu IP para no quedarte fuera.
 
 ## 💻 Uso de la CLI
 
-El framework se ejecuta a través de la terminal y requiere privilegios de Administrador/Root para modificar las reglas del Firewall.
+**Modo Privacidad Total (IA Local vía Ollama) con 12h de Ban:**
+```bash
+sudo python soc_agent.py --log /var/log/auth.log --ai ollama --ban-time 12 --whitelist whitelist.txt
+```
 
-**Modo Privacidad Total (IA Local vía Ollama):**
-`python soc_agent.py --log /var/log/auth.log --threshold 3 --ai ollama`
+### Argumentos
+* `--log`: Ruta al archivo de registro.
+* `--threshold`: Intentos anómalos mínimos (Default: 3).
+* `--ai`: Proveedor del LLM (`ollama` o `groq`).
+* `--ban-time`: Horas de duración del bloqueo antes del rollback (Default: 24).
+* `--whitelist`: Ruta al archivo TXT con IPs protegidas.
 
-**Modo Honeypot VPS (Bajo consumo RAM vía Groq):**
-`python soc_agent.py --log /var/log/auth.log --threshold 5 --ai groq --groq-key "TU_API_KEY_AQUI"`
+## 🚧 Limitaciones y Trabajo Futuro
 
-### Argumentos Disponibles
-
-* `--log`: [Requerido] Ruta absoluta o relativa al archivo de registro del sistema.
-* `--threshold`: Número de intentos anómalos desde una misma IP para considerarlo ataque (Default: 3).
-* `--ai`: Selecciona el proveedor del LLM (`ollama` o `groq`).
-* `--groq-key`: Clave API para usar Groq (también puede leerse como variable de entorno `GROQ_API_KEY`).
-
-## 📊 Salida de Datos (Threat Intel)
-
-El sistema generará automáticamente un archivo `threat_intel.csv` en la raíz del proyecto, registrando cada incidente mitigado con el siguiente formato:
-`Fecha | IP Atacante | País de Origen | Tipo de Ataque (ej. Fuerza Bruta) | Severidad`
+* **Soporte de Logs:** Actualmente optimizado para registros planos tipo syslog (`auth.log`). Se planea integrar soporte nativo para el formato estructurado de Windows Event Viewer (EVTX).
+* **Escalabilidad DB:** Utiliza SQLite para facilitar el despliegue. En entornos de gran volumen, se valorará la migración a PostgreSQL o exportación directa a JSONL para ingesta en ElasticSearch/Logstash.
+* **Agentes concurrentes:** El análisis por lotes maneja ráfagas eficientemente, pero se investigará el uso de `asyncio` dentro de los nodos de LangGraph para ingestas extremas.

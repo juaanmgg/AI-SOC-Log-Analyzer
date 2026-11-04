@@ -1,2 +1,6 @@
-venv/ 
-threat_intel.csv
+venv/
+__pycache__/
+.pytest_cache/
+threat_intel.db
+whitelist.txt
+.env
