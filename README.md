@@ -1,9 +1,13 @@
 # 🛡️ Multi-Agent AI SOC Framework
 
+<div align="center">
+
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)
 ![Architecture](https://img.shields.io/badge/architecture-LangGraph-orange.svg)
+
+</div>
 
 Un sistema avanzado de Detección y Prevención de Intrusiones (IPS/IDS) basado en una arquitectura Multi-Agente orquestada con **LangGraph**. Analiza en tiempo real registros del sistema (SSH, Apache, Nginx), clasifica amenazas utilizando Inteligencia Artificial (Llama 3.1) y ejecuta contramedidas de bloqueo automatizadas (SOAR) con mecanismos de rollback.
 
