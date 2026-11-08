@@ -2,10 +2,10 @@
 
 <div align="center">
 
-![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)
-![Architecture](https://img.shields.io/badge/architecture-LangGraph-orange.svg)
+![Python Version](https://img.shields.io/badge/python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
+![Build](https://img.shields.io/badge/build-passing-brightgreen?style=for-the-badge)
+![Architecture](https://img.shields.io/badge/architecture-LangGraph-orange?style=for-the-badge)
 
 </div>
 
