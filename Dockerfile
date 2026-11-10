@@ -13,4 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+ENV GROQ_API_KEY=""
+
 ENTRYPOINT ["python", "soc_agent.py"]

@@ -5,14 +5,15 @@ from langchain_core.language_models import FakeListChatModel
 
 from soc_agent import (
     DatabaseManager,
-    SOCWorkflow,
+    SOCAnalyzer,
     cargar_whitelist,
+    crear_llm,
     recolectar_logs,
 )
 
 
 def test_extraccion_ips_y_ruido_avanzado():
-    """Prueba exhaustiva del Agente 1 con múltiples patrones de logs (SSH, Nginx, etc.)."""
+    """Prueba la recolección con múltiples patrones de logs (SSH, Nginx, etc.)."""
     logs = [
         "Oct 22 10:12:32 Failed password for root from 203.0.113.45 port 54321 ssh2",
         "Oct 22 10:15:02 Invalid user test from 198.51.100.22 port 49111",
@@ -77,8 +78,8 @@ def test_geolocalizacion_api_mock(mock_get):
     # Usamos un modelo LLM falso para que LangChain pueda construir su cadena sin errores
     fake_llm = FakeListChatModel(responses=['{"amenazas": []}'])
     
-    workflow = SOCWorkflow(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=True, ban_time=24)
-    pais = workflow._obtener_geolocalizacion("8.8.8.8")
+    analyzer = SOCAnalyzer(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=True, ban_time=24)
+    pais = analyzer._obtener_geolocalizacion("8.8.8.8")
 
     assert pais == "Japón"
     mock_get.assert_called_once_with("http://ip-api.com/json/8.8.8.8?fields=country", timeout=3)
@@ -89,10 +90,10 @@ def test_ejecucion_comandos_firewall(mock_subprocess):
     """Asegura que el orquestador genere los binarios correctos de Windows y Linux sin ejecutarlos."""
     fake_llm = FakeListChatModel(responses=['{"amenazas": []}'])
     
-    workflow_win = SOCWorkflow(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=True, ban_time=24)
-    workflow_lin = SOCWorkflow(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=False, ban_time=24)
+    analyzer_win = SOCAnalyzer(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=True, ban_time=24)
+    analyzer_lin = SOCAnalyzer(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=False, ban_time=24)
 
-    workflow_win._ejecutar_bloqueo("5.5.5.5")
+    analyzer_win._ejecutar_bloqueo("5.5.5.5")
     mock_subprocess.assert_called_with(
         'netsh advfirewall firewall add rule name="SOC_5.5.5.5" dir=in action=block remoteip=5.5.5.5',
         check=False,
@@ -101,11 +102,42 @@ def test_ejecucion_comandos_firewall(mock_subprocess):
         stderr=subprocess.DEVNULL,
     )
 
-    workflow_lin._ejecutar_bloqueo("6.6.6.6")
+    analyzer_lin._ejecutar_bloqueo("6.6.6.6")
     mock_subprocess.assert_called_with(
         "sudo ufw deny from 6.6.6.6 to any",
         check=False,
         shell=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+    )
+
+
+def test_pipeline_analiza_y_ejecuta_en_orden():
+    fake_llm = FakeListChatModel(
+        responses=['{"amenazas": [{"ip": "5.5.5.5", "tipo": "Fuerza Bruta", "severidad": "Alta"}]}']
+    )
+    analyzer = SOCAnalyzer(
+        llm=fake_llm,
+        db_manager=MagicMock(),
+        whitelist=set(),
+        es_windows=True,
+        ban_time=24,
+    )
+
+    with patch.object(analyzer, "_obtener_geolocalizacion", return_value="ES"), patch.object(
+        analyzer, "_ejecutar_bloqueo"
+    ) as bloquear:
+        resultado = analyzer.procesar({"5.5.5.5": ["Failed password from 5.5.5.5"]})
+
+    bloquear.assert_called_once_with("5.5.5.5")
+    assert resultado["acciones_ejecutadas"] == ["Bloqueada: 5.5.5.5 (ES) - Fuerza Bruta"]
+
+
+@patch("soc_agent.ChatGroq")
+def test_crear_llm_usa_modelo_configurado(mock_chat_groq):
+    crear_llm("test-key")
+    mock_chat_groq.assert_called_once_with(
+        model="openai/gpt-oss-20b",
+        groq_api_key="test-key",
+        temperature=0,
     )

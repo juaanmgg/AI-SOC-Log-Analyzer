@@ -1,79 +1,105 @@
-# 🛡️ Multi-Agent AI SOC Framework
+# AI SOC Log Analyzer
 
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)
-![Architecture](https://img.shields.io/badge/architecture-LangGraph-orange.svg)
 
-Un sistema avanzado de Detección y Prevención de Intrusiones (IPS/IDS) basado en una arquitectura Multi-Agente orquestada con **LangGraph**. Analiza en tiempo real registros del sistema (SSH, Apache, Nginx), clasifica amenazas utilizando Inteligencia Artificial (Llama 3.1) y ejecuta contramedidas de bloqueo automatizadas (SOAR) con mecanismos de rollback.
+Analizador de logs para un SOC que detecta patrones sospechosos, consulta un LLM para clasificar amenazas y ejecuta respuestas de firewall con rollback automático por TTL.
 
-## 🚀 Características Principales
+## Arquitectura
 
-* **Arquitectura de Grafos (LangGraph):** División lógica entre Agente Recolector (Parser), Agente Analista (LLM) y Agente Táctico (Executor).
-* **Motor LLM Híbrido:** Local (Ollama) para máxima privacidad, o Nube (Groq API) para despliegues en servidores de bajos recursos.
-* **SOAR con Rollback Inteligente (TTL):** Bloqueo dinámico en milisegundos a través de `netsh` (Windows) o `ufw` (Linux). Incluye un demonio en segundo plano que libera IPs automáticamente según un temporizador (ej. 24h) para evitar la saturación del firewall.
-* **Threat Intel estructurado (SQLite):** Enriquecimiento de datos con geolocalización IP en tiempo real y persistencia relacional.
-* **Seguridad en Producción:** Soporte nativo de *Whitelists* para evitar bloqueos accidentales de administradores o subredes internas.
-
-> **[📍 INSERTA AQUÍ UN GIF O SCREENSHOT MOSTRANDO TU TERMINAL BLOQUEANDO UN ATAQUE EN VIVO]**
-
-## 🧠 Arquitectura del Sistema
+El proyecto utiliza un pipeline secuencial, no una arquitectura multiagente:
 
 ```mermaid
-graph TD
-    A[Log de Sistema / auth.log] --> B(Agente 1: Recolector)
-    B -->|Lote de Anomalías| C{Agente 2: Analista LLM}
-    C -->|Falso Positivo| D[Ignorar]
-    C -->|Ataque Confirmado| E(Agente 3: Táctico / Executor)
-    E --> F{Comprobación Whitelist}
-    F -->|IP Segura| D
-    F -->|IP Hostil| G[Regla UFW / Netsh]
-    G --> H[(SQLite: Threat Intel)]
-    H --> I((Demonio TTL de Desbloqueo))
-    I -.->|Expira en 24h| G
+flowchart LR
+    A[Archivo de logs] --> B[Recolectar y agrupar por IP]
+    B --> C[Filtrar por umbral]
+    C --> D[Analizar con Groq<br/>openai/gpt-oss-20b]
+    D --> E[Validar whitelist]
+    E --> F[Bloquear IP]
+    F --> G[(SQLite)]
+    G --> H[Rollback al expirar TTL]
 ```
 
-## 🛠️ Stack Tecnológico
+La separación entre recolección, análisis y ejecución mantiene el flujo fácil de probar sin introducir agentes autónomos ni una capa de orquestación innecesaria.
 
-* **Core:** Python 3.10+, Docker, SQLite.
-* **IA & Orquestación:** LangChain, LangGraph, Ollama, Groq.
-* **Infraestructura:** Integración OS Firewall, CI/CD con GitHub Actions, Pytest.
+## Características
 
-## ⚙️ Instalación y Despliegue
+- Monitorización de logs tipo syslog, SSH, Apache y Nginx.
+- Clasificación estructurada mediante Groq y `openai/gpt-oss-20b`.
+- Bloqueo con `netsh` en Windows o `ufw` en Linux.
+- Whitelist para evitar bloqueos accidentales.
+- Persistencia de amenazas y expiración en SQLite.
+- Hilo de rollback que elimina automáticamente los bloqueos expirados.
 
-### Opción 1: Docker (Recomendado para Producción)
+## Requisitos
+
+- Python 3.10 o superior.
+- Una clave `GROQ_API_KEY`.
+- Permisos suficientes para modificar el firewall.
+
+## Instalación local
+
 ```bash
-docker build -t ai-soc .
-docker run --privileged --network host -v /var/log/auth.log:/app/auth.log -v $(pwd)/threat_intel.db:/app/threat_intel.db ai-soc --log /app/auth.log --ai groq --groq-key "TU_API_KEY"
-```
-
-### Opción 2: Entorno Local
-1. Clona el repositorio e instala dependencias:
-```bash
-git clone [https://github.com/juaanmgg/AI-SOC-Log-Analyzer.git](https://github.com/juaanmgg/AI-SOC-Log-Analyzer.git)
+git clone https://github.com/juaanmgg/AI-SOC-Log-Analyzer.git
 cd AI-SOC-Log-Analyzer
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # En Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
-2. Crea tu archivo `whitelist.txt` y añade tu IP para no quedarte fuera.
 
-## 💻 Uso de la CLI
+Configura la clave:
 
-**Modo Privacidad Total (IA Local vía Ollama) con 12h de Ban:**
 ```bash
-sudo python soc_agent.py --log /var/log/auth.log --ai ollama --ban-time 12 --whitelist whitelist.txt
+export GROQ_API_KEY="TU_API_KEY"
+# PowerShell:
+# $env:GROQ_API_KEY = "TU_API_KEY"
 ```
 
-### Argumentos
-* `--log`: Ruta al archivo de registro.
-* `--threshold`: Intentos anómalos mínimos (Default: 3).
-* `--ai`: Proveedor del LLM (`ollama` o `groq`).
-* `--ban-time`: Horas de duración del bloqueo antes del rollback (Default: 24).
-* `--whitelist`: Ruta al archivo TXT con IPs protegidas.
+Añade las IP protegidas a `whitelist.txt`, una por línea.
 
-## 🚧 Limitaciones y Trabajo Futuro
+## Uso
 
-* **Soporte de Logs:** Actualmente optimizado para registros planos tipo syslog (`auth.log`). Se planea integrar soporte nativo para el formato estructurado de Windows Event Viewer (EVTX).
-* **Escalabilidad DB:** Utiliza SQLite para facilitar el despliegue. En entornos de gran volumen, se valorará la migración a PostgreSQL o exportación directa a JSONL para ingesta en ElasticSearch/Logstash.
-* **Agentes concurrentes:** El análisis por lotes maneja ráfagas eficientemente, pero se investigará el uso de `asyncio` dentro de los nodos de LangGraph para ingestas extremas.
+```bash
+python soc_agent.py \
+  --log /var/log/auth.log \
+  --threshold 3 \
+  --ban-time 12 \
+  --whitelist whitelist.txt
+```
+
+Argumentos:
+
+- `--log`: ruta del archivo de log que se monitoriza.
+- `--threshold`: número mínimo de eventos por IP antes de consultar el LLM (por defecto: `3`).
+- `--ban-time`: duración del bloqueo en horas (por defecto: `24`).
+- `--whitelist`: archivo de IPs exentas (por defecto: `whitelist.txt`).
+- `--groq-key`: clave Groq; si no se proporciona, se usa `GROQ_API_KEY`.
+
+El modelo usado es fijo: `openai/gpt-oss-20b`. Ollama y LangGraph no forman parte del runtime.
+
+## Docker
+
+Construye la imagen:
+
+```bash
+docker build -t ai-soc .
+```
+
+Ejecuta el analizador pasando la clave sin incluirla en la imagen:
+
+```bash
+docker run --privileged --network host \
+  -e GROQ_API_KEY="TU_API_KEY" \
+  -v /var/log/auth.log:/app/auth.log:ro \
+  -v "$(pwd)/threat_intel.db:/app/threat_intel.db" \
+  ai-soc --log /app/auth.log --whitelist /app/whitelist.txt
+```
+
+## Desarrollo y pruebas
+
+```bash
+ruff check .
+pytest test_soc_agent.py
+```
+
+Las pruebas mockean el LLM, la geolocalización y los comandos de firewall; no necesitan una API key ni modificar el firewall real.

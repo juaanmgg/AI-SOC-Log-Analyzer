@@ -7,24 +7,11 @@ import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Any, TypedDict
 
 import requests
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
-from langchain_ollama import ChatOllama
-from langgraph.graph import END, START, StateGraph
-
-
-# ==========================================
-# CONFIGURACIÓN Y ESTADO (LangGraph)
-# ==========================================
-class AgentState(TypedDict):
-    datos_crudos: dict[str, list[str]]
-    amenazas_evaluadas: list[dict[str, Any]]
-    acciones_ejecutadas: list[str]
-
 
 PALABRAS_CLAVE = re.compile(r"(?i)(failed|invalid|error|unauthorized|denied|403|404)")
 REGEX_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
@@ -64,9 +51,9 @@ class DatabaseManager:
 
 
 # ==========================================
-# MULTI-AGENT WORKFLOW (LangGraph Nodes)
+# PIPELINE DE ANÁLISIS Y RESPUESTA
 # ==========================================
-class SOCWorkflow:
+class SOCAnalyzer:
     def __init__(self, llm, db_manager, whitelist, es_windows, ban_time):
         self.llm = llm
         self.db = db_manager
@@ -83,35 +70,24 @@ class SOCWorkflow:
             input_variables=["logs"],
         )
         self.analyst_chain = self.prompt | self.llm | self.parser
-        self.graph = self._build_graph()
 
-    def _build_graph(self):
-        workflow = StateGraph(AgentState)
-        workflow.add_node("analyst_agent", self.analyst_node)
-        workflow.add_node("executor_agent", self.executor_node)
-
-        workflow.add_edge(START, "analyst_agent")
-        workflow.add_edge("analyst_agent", "executor_agent")
-        workflow.add_edge("executor_agent", END)
-        return workflow.compile()
-
-    def analyst_node(self, state: AgentState):
-        """Agente 2: Evalúa contexto con LLM."""
+    def analizar(self, datos_crudos):
+        """Evalúa el lote de logs con el LLM y devuelve las amenazas."""
         resumen = ""
-        for ip, lineas in state["datos_crudos"].items():
+        for ip, lineas in datos_crudos.items():
             resumen += f"\n--- IP: {ip} ---\n" + "\n".join(lineas[:10])
 
         try:
             resultado = self.analyst_chain.invoke({"logs": resumen})
-            return {"amenazas_evaluadas": resultado.get("amenazas", [])}
+            return resultado.get("amenazas", [])
         except Exception as e:  # noqa: BLE001
-            print(f"[-] Error en Analyst Agent: {e}")
-            return {"amenazas_evaluadas": []}
+            print(f"[-] Error en el análisis LLM: {e}")
+            return []
 
-    def executor_node(self, state: AgentState):
-        """Agente 3: Orquesta bloqueo, Threat Intel y Persistencia."""
+    def ejecutar(self, amenazas):
+        """Aplica las acciones tácticas para las amenazas confirmadas."""
         acciones = []
-        for amenaza in state["amenazas_evaluadas"]:
+        for amenaza in amenazas:
             ip = amenaza.get("ip")
             if not ip or ip in self.whitelist:
                 acciones.append(f"Ignorada (Whitelist/Inválida): {ip}")
@@ -127,6 +103,11 @@ class SOCWorkflow:
             print(f"  [+] ACCIÓN TÁCTICA: Bloqueada {ip} | País: {pais} | TTL: {self.ban_time}h")
 
         return {"acciones_ejecutadas": acciones}
+
+    def procesar(self, datos_crudos):
+        """Ejecuta secuencialmente el análisis y la respuesta para un lote."""
+        amenazas = self.analizar(datos_crudos)
+        return self.ejecutar(amenazas)
 
     def _obtener_geolocalizacion(self, ip):
         try:
@@ -145,10 +126,10 @@ class SOCWorkflow:
 
 
 # ==========================================
-# AGENTE 1: PARSER EN TIEMPO REAL & ORQUESTADOR
+# RECOLECCIÓN EN TIEMPO REAL & ORQUESTACIÓN
 # ==========================================
 def recolectar_logs(lineas):
-    """Filtra y extrae datos crudos (Agente 1)."""
+    """Filtra y extrae datos crudos para el pipeline."""
     datos = defaultdict(list)
     for linea in lineas:
         if PALABRAS_CLAVE.search(linea):
@@ -182,22 +163,31 @@ def cargar_whitelist(ruta):
     return wl
 
 
+def crear_llm(groq_key):
+    if not groq_key:
+        raise ValueError("Falta GROQ_API_KEY. Configura la variable de entorno o usa --groq-key.")
+    return ChatGroq(
+        model="openai/gpt-oss-20b",
+        groq_api_key=groq_key,
+        temperature=0,
+    )
+
+
 def iniciar_soc(args, es_windows):
     whitelist = cargar_whitelist(args.whitelist)
     db = DatabaseManager()
 
-    # Iniciar motor LLM
-    if args.ai == "groq":
-        llm = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=args.groq_key, temperature=0)
-    else:
-        llm = ChatOllama(model="llama3.1-local", temperature=0, format="json")
+    try:
+        llm = crear_llm(args.groq_key)
+    except ValueError as error:
+        raise SystemExit(f"[-] {error}") from error
 
-    workflow = SOCWorkflow(llm, db, whitelist, es_windows, args.ban_time)
+    analyzer = SOCAnalyzer(llm, db, whitelist, es_windows, args.ban_time)
 
     # Iniciar hilo de rollback
     threading.Thread(target=hilo_rollback, args=(db, es_windows), daemon=True).start()
 
-    print(f"[*] Vigilando '{args.log}'. Motor: {args.ai.upper()}. TTL: {args.ban_time}h")
+    print(f"[*] Vigilando '{args.log}'. Motor: Groq/openai/gpt-oss-20b. TTL: {args.ban_time}h")
     with open(args.log) as archivo:
         archivo.seek(0, 2)
         lineas_nuevas = []
@@ -212,7 +202,7 @@ def iniciar_soc(args, es_windows):
                         datos = recolectar_logs(lineas_nuevas)
                         ips_criticas = {ip: logs for ip, logs in datos.items() if len(logs) >= args.threshold}
                         if ips_criticas:
-                            workflow.graph.invoke({"datos_crudos": ips_criticas})
+                            analyzer.procesar(ips_criticas)
                         lineas_nuevas.clear()
                         tiempo_ultimo = time.time()
                     continue
@@ -223,10 +213,9 @@ def iniciar_soc(args, es_windows):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Multi-Agent SOC Framework usando LangGraph")
+    parser = argparse.ArgumentParser(description="SOC Log Analyzer con pipeline secuencial")
     parser.add_argument("--log", type=str, required=True, help="Ruta al log")
     parser.add_argument("--threshold", type=int, default=3, help="Eventos mínimos")
-    parser.add_argument("--ai", type=str, choices=["ollama", "groq"], default="ollama")
     parser.add_argument("--groq-key", type=str, default=os.getenv("GROQ_API_KEY"))
     parser.add_argument("--whitelist", type=str, default="whitelist.txt", help="Archivo de IPs exentas")
     parser.add_argument("--ban-time", type=int, default=24, help="Horas de bloqueo (TTL)")
