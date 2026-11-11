@@ -104,7 +104,7 @@ def test_ejecucion_comandos_firewall(mock_subprocess):
 
     analyzer_lin._ejecutar_bloqueo("6.6.6.6")
     mock_subprocess.assert_called_with(
-        "sudo ufw deny from 6.6.6.6 to any",
+        "ufw deny from 6.6.6.6 to any",
         check=False,
         shell=True,
         stdout=subprocess.DEVNULL,

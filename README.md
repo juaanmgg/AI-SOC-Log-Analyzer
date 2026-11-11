@@ -1,41 +1,19 @@
 # AI SOC Log Analyzer
 
-<<<<<<< HEAD
-![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-
-Analizador de logs para un SOC que detecta patrones sospechosos, consulta un LLM para clasificar amenazas y ejecuta respuestas de firewall con rollback automático por TTL.
-=======
 <div align="center">
 
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen?style=for-the-badge)
-![Architecture](https://img.shields.io/badge/architecture-LangGraph-orange?style=for-the-badge)
+![Architecture](https://img.shields.io/badge/architecture-sequential%20pipeline-orange?style=for-the-badge)
 
 </div>
 
-Un sistema avanzado de Detección y Prevención de Intrusiones (IPS/IDS) basado en una arquitectura Multi-Agente orquestada con **LangGraph**. Analiza en tiempo real registros del sistema (SSH, Apache, Nginx), clasifica amenazas utilizando Inteligencia Artificial y ejecuta contramedidas de bloqueo automatizadas (SOAR) con mecanismos de rollback.
->>>>>>> 98cecb003755d727385238d21281aeff9538593a
+Analizador de logs para un SOC que detecta patrones sospechosos, consulta un LLM para clasificar amenazas y ejecuta respuestas de firewall con rollback automático por TTL.
 
 ## Arquitectura
 
-<<<<<<< HEAD
-El proyecto utiliza un pipeline secuencial, no una arquitectura multiagente:
-=======
-* **Arquitectura de Grafos (LangGraph):** División lógica entre Agente Recolector (Parser), Agente Analista (LLM) y Agente Táctico (Executor).
-* **Motor LLM Híbrido:** Local (Ollama) para máxima privacidad, o Nube (Groq API) para despliegues en servidores de bajos recursos.
-* **Despliegue en Producción (Honeypot):** Testeado en un entorno real desplegando la herramienta en una máquina virtual de Microsoft Azure, mitigando ataques automatizados de internet en tiempo real.
-* **SOAR con Rollback Inteligente (TTL):** Bloqueo dinámico en milisegundos a través de `netsh` (Windows) o `ufw` (Linux). Incluye un demonio en segundo plano que libera IPs automáticamente según un temporizador (ej. 24h) para evitar la saturación del firewall.
-* **Threat Intel estructurado (SQLite):** Enriquecimiento de datos con geolocalización IP en tiempo real y persistencia relacional.
-* **Seguridad en Producción:** Soporte nativo de *Whitelists* para evitar bloqueos accidentales de administradores o subredes internas.
-
-> **Demostración:** Base de datos `SQLite` tras 48h desplegado como Honeypot en Azure capturando ataques reales.
-> 
-> ![Captura de ataques reales en Azure](threat_intel_screenshot.png)
-
-## 🧠 Arquitectura del Sistema
->>>>>>> 98cecb003755d727385238d21281aeff9538593a
+El proyecto utiliza un pipeline secuencial explícito, no una arquitectura multiagente:
 
 ```mermaid
 flowchart LR
@@ -50,13 +28,7 @@ flowchart LR
 
 La separación entre recolección, análisis y ejecución mantiene el flujo fácil de probar sin introducir agentes autónomos ni una capa de orquestación innecesaria.
 
-<<<<<<< HEAD
 ## Características
-=======
-* **Core:** Python 3.10+, Docker, SQLite.
-* **IA & Orquestación:** LangChain, LangGraph, Ollama, Groq.
-* **Infraestructura:** Integración OS Firewall, CI/CD con GitHub Actions, Pytest, Microsoft Azure.
->>>>>>> 98cecb003755d727385238d21281aeff9538593a
 
 - Monitorización de logs tipo syslog, SSH, Apache y Nginx.
 - Clasificación estructurada mediante Groq y `openai/gpt-oss-20b`.
@@ -64,6 +36,11 @@ La separación entre recolección, análisis y ejecución mantiene el flujo fác
 - Whitelist para evitar bloqueos accidentales.
 - Persistencia de amenazas y expiración en SQLite.
 - Hilo de rollback que elimina automáticamente los bloqueos expirados.
+- Despliegue posible en una máquina virtual de Azure como honeypot.
+
+> **Demostración:** Base de datos SQLite tras un despliegue como honeypot en Azure capturando ataques reales.
+>
+> ![Captura de ataques reales en Azure](threat_intel_screenshot.png)
 
 ## Requisitos
 

@@ -120,7 +120,7 @@ class SOCAnalyzer:
         cmd = (
             f'netsh advfirewall firewall add rule name="SOC_{ip}" dir=in action=block remoteip={ip}'
             if self.es_windows
-            else f"sudo ufw deny from {ip} to any"
+            else f"ufw deny from {ip} to any"
         )
         subprocess.run(cmd, check=False, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -147,7 +147,7 @@ def hilo_rollback(db: DatabaseManager, es_windows: bool):
             cmd = (
                 f'netsh advfirewall firewall delete rule name="SOC_{ip}"'
                 if es_windows
-                else f"sudo ufw delete deny from {ip}"
+                else f"ufw delete deny from {ip}"
             )
             subprocess.run(cmd, check=False, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             db.marcar_desbloqueada(ip)
