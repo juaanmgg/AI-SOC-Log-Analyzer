@@ -92,6 +92,15 @@ python soc_agent.py \
   --whitelist whitelist.txt
 ```
 
+Por seguridad, el programa funciona en modo simulación por defecto. Para permitir
+modificaciones del firewall hay que añadir explícitamente `--auto-block`:
+
+```bash
+python soc_agent.py --log /var/log/auth.log --auto-block
+```
+
+`--dry-run` fuerza la simulación y evita tanto el firewall como las consultas de geolocalización.
+
 Argumentos:
 
 - `--log`: ruta del archivo de log que se monitoriza.
@@ -99,6 +108,8 @@ Argumentos:
 - `--ban-time`: duración del bloqueo en horas (por defecto: `24`).
 - `--whitelist`: archivo de IPs exentas (por defecto: `whitelist.txt`).
 - `--groq-key`: clave Groq; si no se proporciona, se usa `GROQ_API_KEY`.
+- `--auto-block`: permite aplicar bloqueos reales; está desactivado por defecto.
+- `--dry-run`: muestra las acciones sin ejecutarlas.
 
 El modelo usado es fijo: `openai/gpt-oss-20b`. Ollama y LangGraph no forman parte del runtime.
 
@@ -132,3 +143,13 @@ pytest test_soc_agent.py
 ```
 
 Las pruebas mockean el LLM, la geolocalización y los comandos de firewall; no necesitan una API key ni modificar el firewall real.
+
+## Controles de seguridad implementados
+
+- Las respuestas del LLM se validan antes de poder generar una acción.
+- Las IP se comprueban con `ipaddress`, no solo mediante expresiones regulares.
+- Los comandos del firewall se ejecutan sin `shell=True`.
+- Una IP con un bloqueo vigente no se desbloquea por la expiración de un registro antiguo.
+
+Este proyecto es educativo. Antes de conectarlo a un entorno especializado, se recomienda
+probarlo en una máquina aislada y revisar manualmente las reglas generadas por el firewall.
