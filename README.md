@@ -88,6 +88,7 @@ Añade las IP protegidas a `whitelist.txt`, una por línea.
 python soc_agent.py \
   --log /var/log/auth.log \
   --threshold 3 \
+  --window-seconds 60 \
   --ban-time 12 \
   --whitelist whitelist.txt
 ```
@@ -105,6 +106,7 @@ Argumentos:
 
 - `--log`: ruta del archivo de log que se monitoriza.
 - `--threshold`: número mínimo de eventos por IP antes de consultar el LLM (por defecto: `3`).
+- `--window-seconds`: ventana temporal en la que se cuentan los eventos (por defecto: `60`).
 - `--ban-time`: duración del bloqueo en horas (por defecto: `24`).
 - `--whitelist`: archivo de IPs exentas (por defecto: `whitelist.txt`).
 - `--groq-key`: clave Groq; si no se proporciona, se usa `GROQ_API_KEY`.

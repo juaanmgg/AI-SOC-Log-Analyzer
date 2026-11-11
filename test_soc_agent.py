@@ -1,3 +1,4 @@
+import sqlite3
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -151,13 +152,15 @@ def test_normalizacion_descarta_ips_invalidas():
             "amenazas": [
                 {"ip": "8.8.8.8", "tipo": "Scanner", "severidad": "Media"},
                 {"ip": "999.999.999.999", "tipo": "Fuerza Bruta"},
-                {"ip": "no-es-una-ip", "tipo": "DDoS"},
+                {"ip": "no-es-una-ip", "tipo": "DDoS", "severidad": "Crítica"},
+                {"ip": "9.9.9.9", "tipo": "DDoS", "severidad": "desconocida"},
             ]
         }
     )
 
     assert resultado == [
-        {"ip": "8.8.8.8", "tipo": "Scanner", "severidad": "Media"}
+        {"ip": "8.8.8.8", "tipo": "Scanner", "severidad": "Media"},
+        {"ip": "9.9.9.9", "tipo": "DDoS", "severidad": "Media"},
     ]
 
 
@@ -188,3 +191,27 @@ def test_modo_simulacion_no_ejecuta_firewall():
     bloquear.assert_not_called()
     analyzer.db.registrar_amenaza.assert_not_called()
     assert resultado["acciones_ejecutadas"] == ["Simulada: 8.8.8.8 - Scanner"]
+
+
+def test_registrar_amenaza_renueva_bloqueo_activo(tmp_path):
+    db = DatabaseManager(str(tmp_path / "threats.db"))
+    db.registrar_amenaza("8.8.8.8", "US", "Scanner", "Media", 1)
+    db.registrar_amenaza("8.8.8.8", "US", "Scanner", "Alta", 2)
+
+    with sqlite3.connect(tmp_path / "threats.db") as conn:
+        total, severidad = conn.execute(
+            "SELECT COUNT(*), MAX(severidad) FROM amenazas WHERE ip = ? AND activo = 1",
+            ("8.8.8.8",),
+        ).fetchone()
+
+    assert total == 1
+    assert severidad == "Alta"
+
+
+@patch("soc_agent.subprocess.run", side_effect=subprocess.CalledProcessError(1, "ufw"))
+def test_fallo_firewall_no_se_reporta_como_exito(mock_subprocess):
+    fake_llm = FakeListChatModel(responses=['{"amenazas": []}'])
+    analyzer = SOCAnalyzer(fake_llm, MagicMock(), set(), False, 24, auto_block=True)
+
+    assert analyzer._ejecutar_bloqueo("8.8.8.8") is False
+    mock_subprocess.assert_called_once()

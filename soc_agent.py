@@ -7,8 +7,8 @@ import sqlite3
 import subprocess
 import threading
 import time
-from collections import defaultdict
-from datetime import datetime, timedelta
+from collections import defaultdict, deque
+from datetime import datetime, timedelta, timezone
 
 import requests
 from langchain_core.output_parsers import JsonOutputParser
@@ -18,6 +18,11 @@ from langchain_groq import ChatGroq
 LOGGER = logging.getLogger(__name__)
 PALABRAS_CLAVE = re.compile(r"(?i)(failed|invalid|error|unauthorized|denied|403|404)")
 REGEX_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+SEVERIDADES_VALIDAS = {"Baja", "Media", "Alta", "Crítica"}
+
+
+def ahora_utc():
+    return datetime.now(timezone.utc)
 
 
 # ==========================================
@@ -33,17 +38,30 @@ class DatabaseManager:
             conn.execute('''CREATE TABLE IF NOT EXISTS amenazas
                             (id INTEGER PRIMARY KEY, fecha TEXT, ip TEXT, pais TEXT, 
                              tipo TEXT, severidad TEXT, expira_en TEXT, activo INTEGER)''')
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_amenazas_expiracion ON amenazas (activo, expira_en)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_amenazas_ip_activa ON amenazas (ip, activo)")
 
     def registrar_amenaza(self, ip, pais, tipo, severidad, ban_time_hours):
-        expiracion = (datetime.now() + timedelta(hours=ban_time_hours)).isoformat()
+        fecha = ahora_utc()
+        expiracion = (fecha + timedelta(hours=ban_time_hours)).isoformat()
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO amenazas (fecha, ip, pais, tipo, severidad, expira_en, activo) VALUES (?, ?, ?, ?, ?, ?, 1)",
-                (datetime.now().isoformat(), ip, pais, tipo, severidad, expiracion),
-            )
+            actualizado = conn.execute(
+                """
+                UPDATE amenazas
+                SET fecha = ?, pais = ?, tipo = ?, severidad = ?, expira_en = ?, activo = 1
+                WHERE ip = ? AND activo = 1
+                """,
+                (fecha.isoformat(), pais, tipo, severidad, expiracion, ip),
+            ).rowcount
+            if not actualizado:
+                conn.execute(
+                    "INSERT INTO amenazas (fecha, ip, pais, tipo, severidad, expira_en, activo) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1)",
+                    (fecha.isoformat(), ip, pais, tipo, severidad, expiracion),
+                )
 
     def obtener_ips_expiradas(self):
-        ahora = datetime.now().isoformat()
+        ahora = ahora_utc().isoformat()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
@@ -67,7 +85,7 @@ class DatabaseManager:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE amenazas SET activo = 0 WHERE ip = ? AND activo = 1 AND expira_en <= ?",
-                (ip, datetime.now().isoformat()),
+                (ip, ahora_utc().isoformat()),
             )
 
 
@@ -83,6 +101,7 @@ class SOCAnalyzer:
         self.ban_time = ban_time
         self.auto_block = auto_block
         self.dry_run = dry_run
+        self._geo_cache = {}
 
         self.parser = JsonOutputParser()
         self.prompt = PromptTemplate(
@@ -104,11 +123,10 @@ class SOCAnalyzer:
             resultado = self.analyst_chain.invoke({"logs": resumen})
             return self._normalizar_amenazas(resultado)
         except (TypeError, ValueError, KeyError) as error:
-            LOGGER.error("Respuesta inválida del LLM: %s", error)
-            return []
-        except Exception:
+            raise RuntimeError("Respuesta inválida del LLM") from error
+        except Exception as error:
             LOGGER.exception("Error inesperado durante el análisis LLM")
-            return []
+            raise RuntimeError("No se pudo completar el análisis LLM") from error
 
     @staticmethod
     def _normalizar_amenazas(resultado):
@@ -130,11 +148,14 @@ class SOCAnalyzer:
                 ipaddress.ip_address(ip)
             except ValueError:
                 continue
+            severidad = amenaza.get("severidad", "Media")
+            if severidad not in SEVERIDADES_VALIDAS:
+                severidad = "Media"
             normalizadas.append(
                 {
                     "ip": ip,
                     "tipo": str(amenaza.get("tipo", "Desconocido")),
-                    "severidad": str(amenaza.get("severidad", "Media")),
+                    "severidad": severidad,
                 }
             )
         return normalizadas
@@ -173,11 +194,18 @@ class SOCAnalyzer:
         return self.ejecutar(amenazas)
 
     def _obtener_geolocalizacion(self, ip):
+        cacheada = self._geo_cache.get(ip)
+        if cacheada and time.monotonic() - cacheada[0] < 3600:
+            return cacheada[1]
         try:
             r = requests.get(f"http://ip-api.com/json/{ip}?fields=country", timeout=3)
-            return r.json().get("country", "Desconocido") if r.status_code == 200 else "Desconocido"
-        except requests.RequestException:
-            return "Desconocido"
+            payload = r.json() if r.status_code == 200 else {}
+            pais = payload.get("country", "Desconocido") if isinstance(payload, dict) else "Desconocido"
+        except (requests.RequestException, ValueError):
+            LOGGER.warning("No se pudo geolocalizar %s", ip)
+            pais = "Desconocido"
+        self._geo_cache[ip] = (time.monotonic(), pais)
+        return pais
 
     def _ejecutar_bloqueo(self, ip):
         cmd = (
@@ -222,9 +250,10 @@ def recolectar_logs(lineas):
     return datos
 
 
-def hilo_rollback(db: DatabaseManager, es_windows: bool):
+def hilo_rollback(db: DatabaseManager, es_windows: bool, stop_event=None, intervalo=60):
     """Demonio que libera IPs cuyo TTL ha expirado."""
-    while True:
+    stop_event = stop_event or threading.Event()
+    while not stop_event.is_set():
         expiradas = db.obtener_ips_expiradas()
         for ip in expiradas:
             cmd = (
@@ -245,7 +274,7 @@ def hilo_rollback(db: DatabaseManager, es_windows: bool):
                 continue
             db.marcar_desbloqueada(ip)
             print(f"  [~] ROLLBACK: IP {ip} desbloqueada (TTL expirado).")
-        time.sleep(60)  # Chequeo cada minuto
+        stop_event.wait(intervalo)
 
 
 def cargar_whitelist(ruta):
@@ -264,6 +293,13 @@ def crear_llm(groq_key):
         groq_api_key=groq_key,
         temperature=0,
     )
+
+
+def entero_positivo(valor):
+    numero = int(valor)
+    if numero <= 0:
+        raise argparse.ArgumentTypeError("debe ser un entero positivo")
+    return numero
 
 
 def iniciar_soc(args, es_windows):
@@ -285,41 +321,72 @@ def iniciar_soc(args, es_windows):
         dry_run=args.dry_run,
     )
 
-    # Iniciar hilo de rollback
-    threading.Thread(target=hilo_rollback, args=(db, es_windows), daemon=True).start()
+    rollback_stop = threading.Event()
+    threading.Thread(
+        target=hilo_rollback,
+        args=(db, es_windows, rollback_stop),
+        daemon=True,
+    ).start()
 
     print(f"[*] Vigilando '{args.log}'. Motor: Groq/openai/gpt-oss-20b. TTL: {args.ban_time}h")
     with open(args.log) as archivo:
         archivo.seek(0, 2)
-        lineas_nuevas = []
-        tiempo_ultimo = time.time()
+        eventos_recientes = deque()
+        alertas_emitidas = {}
+        tiempo_ultimo_analisis = time.monotonic()
+        identidad_archivo = (os.fstat(archivo.fileno()).st_dev, os.fstat(archivo.fileno()).st_ino)
 
         try:
             while True:
                 linea = archivo.readline()
+                ahora = time.monotonic()
+                if linea:
+                    eventos_recientes.append((ahora, linea))
+
+                while eventos_recientes and ahora - eventos_recientes[0][0] > args.window_seconds:
+                    eventos_recientes.popleft()
+
+                if ahora - tiempo_ultimo_analisis >= 10 and eventos_recientes:
+                    datos = recolectar_logs(linea for _, linea in eventos_recientes)
+                    ips_criticas = {}
+                    for ip, logs in datos.items():
+                        ultima_alerta = alertas_emitidas.get(ip, 0)
+                        if len(logs) >= args.threshold and ahora - ultima_alerta >= args.window_seconds:
+                            ips_criticas[ip] = logs
+                            alertas_emitidas[ip] = ahora
+                    if ips_criticas:
+                        analyzer.procesar(ips_criticas)
+                    tiempo_ultimo_analisis = ahora
+
+                nueva_identidad = (os.stat(args.log).st_dev, os.stat(args.log).st_ino)
+                if nueva_identidad != identidad_archivo:
+                    archivo.close()
+                    archivo = open(args.log)
+                    archivo.seek(0, 2)
+                    identidad_archivo = nueva_identidad
+                    eventos_recientes.clear()
+                    alertas_emitidas.clear()
+
                 if not linea:
                     time.sleep(1)
-                    if lineas_nuevas and (time.time() - tiempo_ultimo > 10):
-                        datos = recolectar_logs(lineas_nuevas)
-                        ips_criticas = {ip: logs for ip, logs in datos.items() if len(logs) >= args.threshold}
-                        if ips_criticas:
-                            analyzer.procesar(ips_criticas)
-                        lineas_nuevas.clear()
-                        tiempo_ultimo = time.time()
-                    continue
-
-                lineas_nuevas.append(linea)
         except KeyboardInterrupt:
+            rollback_stop.set()
             print("\n[*] SOC desconectado.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SOC Log Analyzer con pipeline secuencial")
     parser.add_argument("--log", type=str, required=True, help="Ruta al log")
-    parser.add_argument("--threshold", type=int, default=3, help="Eventos mínimos")
+    parser.add_argument("--threshold", type=entero_positivo, default=3, help="Eventos mínimos")
     parser.add_argument("--groq-key", type=str, default=os.getenv("GROQ_API_KEY"))
     parser.add_argument("--whitelist", type=str, default="whitelist.txt", help="Archivo de IPs exentas")
-    parser.add_argument("--ban-time", type=int, default=24, help="Horas de bloqueo (TTL)")
+    parser.add_argument("--ban-time", type=entero_positivo, default=24, help="Horas de bloqueo (TTL)")
+    parser.add_argument(
+        "--window-seconds",
+        type=entero_positivo,
+        default=60,
+        help="Ventana temporal para contar eventos por IP",
+    )
     modo = parser.add_mutually_exclusive_group()
     modo.add_argument(
         "--auto-block",
