@@ -1,4 +1,6 @@
 import argparse
+import ipaddress
+import logging
 import os
 import re
 import sqlite3
@@ -13,6 +15,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
 
+LOGGER = logging.getLogger(__name__)
 PALABRAS_CLAVE = re.compile(r"(?i)(failed|invalid|error|unauthorized|denied|403|404)")
 REGEX_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
@@ -42,24 +45,44 @@ class DatabaseManager:
     def obtener_ips_expiradas(self):
         ahora = datetime.now().isoformat()
         with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("SELECT ip FROM amenazas WHERE activo = 1 AND expira_en <= ?", (ahora,))
+            cursor = conn.execute(
+                """
+                SELECT DISTINCT amenaza.ip
+                FROM amenazas AS amenaza
+                WHERE amenaza.activo = 1
+                  AND amenaza.expira_en <= ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM amenazas AS vigente
+                      WHERE vigente.ip = amenaza.ip
+                        AND vigente.activo = 1
+                        AND vigente.expira_en > ?
+                  )
+                """,
+                (ahora, ahora),
+            )
             return [fila[0] for fila in cursor.fetchall()]
 
     def marcar_desbloqueada(self, ip):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("UPDATE amenazas SET activo = 0 WHERE ip = ?", (ip,))
+            conn.execute(
+                "UPDATE amenazas SET activo = 0 WHERE ip = ? AND activo = 1 AND expira_en <= ?",
+                (ip, datetime.now().isoformat()),
+            )
 
 
 # ==========================================
 # PIPELINE DE ANÁLISIS Y RESPUESTA
 # ==========================================
 class SOCAnalyzer:
-    def __init__(self, llm, db_manager, whitelist, es_windows, ban_time):
+    def __init__(self, llm, db_manager, whitelist, es_windows, ban_time, auto_block=False, dry_run=False):
         self.llm = llm
         self.db = db_manager
         self.whitelist = whitelist
         self.es_windows = es_windows
         self.ban_time = ban_time
+        self.auto_block = auto_block
+        self.dry_run = dry_run
 
         self.parser = JsonOutputParser()
         self.prompt = PromptTemplate(
@@ -79,25 +102,65 @@ class SOCAnalyzer:
 
         try:
             resultado = self.analyst_chain.invoke({"logs": resumen})
-            return resultado.get("amenazas", [])
-        except Exception as e:  # noqa: BLE001
-            print(f"[-] Error en el análisis LLM: {e}")
+            return self._normalizar_amenazas(resultado)
+        except (TypeError, ValueError, KeyError) as error:
+            LOGGER.error("Respuesta inválida del LLM: %s", error)
             return []
+        except Exception:
+            LOGGER.exception("Error inesperado durante el análisis LLM")
+            return []
+
+    @staticmethod
+    def _normalizar_amenazas(resultado):
+        if not isinstance(resultado, dict):
+            raise TypeError("La respuesta del LLM debe ser un objeto JSON")
+
+        amenazas = resultado.get("amenazas", [])
+        if not isinstance(amenazas, list):
+            raise TypeError("'amenazas' debe ser una lista")
+
+        normalizadas = []
+        for amenaza in amenazas:
+            if not isinstance(amenaza, dict):
+                continue
+            ip = amenaza.get("ip")
+            if not isinstance(ip, str):
+                continue
+            try:
+                ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            normalizadas.append(
+                {
+                    "ip": ip,
+                    "tipo": str(amenaza.get("tipo", "Desconocido")),
+                    "severidad": str(amenaza.get("severidad", "Media")),
+                }
+            )
+        return normalizadas
 
     def ejecutar(self, amenazas):
         """Aplica las acciones tácticas para las amenazas confirmadas."""
         acciones = []
         for amenaza in amenazas:
             ip = amenaza.get("ip")
-            if not ip or ip in self.whitelist:
+            if not ip or ip in self.whitelist or not self._es_ip_valida(ip):
                 acciones.append(f"Ignorada (Whitelist/Inválida): {ip}")
                 continue
 
-            pais = self._obtener_geolocalizacion(ip)
             tipo = amenaza.get("tipo", "Desconocido")
             sev = amenaza.get("severidad", "Media")
 
-            self._ejecutar_bloqueo(ip)
+            if self.dry_run or not self.auto_block:
+                acciones.append(f"Simulada: {ip} - {tipo}")
+                LOGGER.info("Acción simulada: bloquear %s (%s)", ip, tipo)
+                continue
+
+            pais = self._obtener_geolocalizacion(ip)
+            if not self._ejecutar_bloqueo(ip):
+                acciones.append(f"Error de firewall: {ip}")
+                continue
+
             self.db.registrar_amenaza(ip, pais, tipo, sev, self.ban_time)
             acciones.append(f"Bloqueada: {ip} ({pais}) - {tipo}")
             print(f"  [+] ACCIÓN TÁCTICA: Bloqueada {ip} | País: {pais} | TTL: {self.ban_time}h")
@@ -118,11 +181,31 @@ class SOCAnalyzer:
 
     def _ejecutar_bloqueo(self, ip):
         cmd = (
-            f'netsh advfirewall firewall add rule name="SOC_{ip}" dir=in action=block remoteip={ip}'
+            ["netsh", "advfirewall", "firewall", "add", "rule", f"name=SOC_{ip}",
+             "dir=in", "action=block", f"remoteip={ip}"]
             if self.es_windows
-            else f"ufw deny from {ip} to any"
+            else ["ufw", "deny", "from", ip, "to", "any"]
         )
-        subprocess.run(cmd, check=False, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                shell=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            LOGGER.exception("No se pudo ejecutar el bloqueo de firewall para %s", ip)
+            return False
+        return True
+
+    @staticmethod
+    def _es_ip_valida(ip):
+        try:
+            ipaddress.ip_address(ip)
+            return True
+        except (TypeError, ValueError):
+            return False
 
 
 # ==========================================
@@ -145,11 +228,21 @@ def hilo_rollback(db: DatabaseManager, es_windows: bool):
         expiradas = db.obtener_ips_expiradas()
         for ip in expiradas:
             cmd = (
-                f'netsh advfirewall firewall delete rule name="SOC_{ip}"'
+                ["netsh", "advfirewall", "firewall", "delete", "rule", f"name=SOC_{ip}"]
                 if es_windows
-                else f"ufw delete deny from {ip}"
+                else ["ufw", "delete", "deny", "from", ip]
             )
-            subprocess.run(cmd, check=False, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    shell=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except (OSError, subprocess.SubprocessError):
+                LOGGER.exception("No se pudo ejecutar el rollback de firewall para %s", ip)
+                continue
             db.marcar_desbloqueada(ip)
             print(f"  [~] ROLLBACK: IP {ip} desbloqueada (TTL expirado).")
         time.sleep(60)  # Chequeo cada minuto
@@ -182,7 +275,15 @@ def iniciar_soc(args, es_windows):
     except ValueError as error:
         raise SystemExit(f"[-] {error}") from error
 
-    analyzer = SOCAnalyzer(llm, db, whitelist, es_windows, args.ban_time)
+    analyzer = SOCAnalyzer(
+        llm,
+        db,
+        whitelist,
+        es_windows,
+        args.ban_time,
+        auto_block=args.auto_block,
+        dry_run=args.dry_run,
+    )
 
     # Iniciar hilo de rollback
     threading.Thread(target=hilo_rollback, args=(db, es_windows), daemon=True).start()
@@ -219,6 +320,17 @@ if __name__ == "__main__":
     parser.add_argument("--groq-key", type=str, default=os.getenv("GROQ_API_KEY"))
     parser.add_argument("--whitelist", type=str, default="whitelist.txt", help="Archivo de IPs exentas")
     parser.add_argument("--ban-time", type=int, default=24, help="Horas de bloqueo (TTL)")
+    modo = parser.add_mutually_exclusive_group()
+    modo.add_argument(
+        "--auto-block",
+        action="store_true",
+        help="Permite modificar el firewall; por defecto solo se simulan las acciones",
+    )
+    modo.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Analiza y muestra acciones sin consultar geolocalización ni modificar el firewall",
+    )
 
     args = parser.parse_args()
     iniciar_soc(args, os.name == "nt")

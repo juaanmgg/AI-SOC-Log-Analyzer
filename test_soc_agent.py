@@ -95,18 +95,19 @@ def test_ejecucion_comandos_firewall(mock_subprocess):
 
     analyzer_win._ejecutar_bloqueo("5.5.5.5")
     mock_subprocess.assert_called_with(
-        'netsh advfirewall firewall add rule name="SOC_5.5.5.5" dir=in action=block remoteip=5.5.5.5',
-        check=False,
-        shell=True,
+        ["netsh", "advfirewall", "firewall", "add", "rule", "name=SOC_5.5.5.5",
+         "dir=in", "action=block", "remoteip=5.5.5.5"],
+        check=True,
+        shell=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
 
     analyzer_lin._ejecutar_bloqueo("6.6.6.6")
     mock_subprocess.assert_called_with(
-        "ufw deny from 6.6.6.6 to any",
-        check=False,
-        shell=True,
+        ["ufw", "deny", "from", "6.6.6.6", "to", "any"],
+        check=True,
+        shell=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -122,6 +123,7 @@ def test_pipeline_analiza_y_ejecuta_en_orden():
         whitelist=set(),
         es_windows=True,
         ban_time=24,
+        auto_block=True,
     )
 
     with patch.object(analyzer, "_obtener_geolocalizacion", return_value="ES"), patch.object(
@@ -141,3 +143,48 @@ def test_crear_llm_usa_modelo_configurado(mock_chat_groq):
         groq_api_key="test-key",
         temperature=0,
     )
+
+
+def test_normalizacion_descarta_ips_invalidas():
+    resultado = SOCAnalyzer._normalizar_amenazas(
+        {
+            "amenazas": [
+                {"ip": "8.8.8.8", "tipo": "Scanner", "severidad": "Media"},
+                {"ip": "999.999.999.999", "tipo": "Fuerza Bruta"},
+                {"ip": "no-es-una-ip", "tipo": "DDoS"},
+            ]
+        }
+    )
+
+    assert resultado == [
+        {"ip": "8.8.8.8", "tipo": "Scanner", "severidad": "Media"}
+    ]
+
+
+def test_rollback_no_expira_ip_con_bloqueo_vigente(tmp_path):
+    db = DatabaseManager(str(tmp_path / "threats.db"))
+    db.registrar_amenaza("1.1.1.1", "US", "Scanner", "Media", ban_time_hours=-1)
+    db.registrar_amenaza("1.1.1.1", "US", "Scanner", "Alta", ban_time_hours=1)
+
+    assert db.obtener_ips_expiradas() == []
+
+
+def test_modo_simulacion_no_ejecuta_firewall():
+    fake_llm = FakeListChatModel(responses=['{"amenazas": []}'])
+    analyzer = SOCAnalyzer(
+        llm=fake_llm,
+        db_manager=MagicMock(),
+        whitelist=set(),
+        es_windows=True,
+        ban_time=24,
+        dry_run=True,
+    )
+
+    with patch.object(analyzer, "_ejecutar_bloqueo") as bloquear:
+        resultado = analyzer.ejecutar(
+            [{"ip": "8.8.8.8", "tipo": "Scanner", "severidad": "Media"}]
+        )
+
+    bloquear.assert_not_called()
+    analyzer.db.registrar_amenaza.assert_not_called()
+    assert resultado["acciones_ejecutadas"] == ["Simulada: 8.8.8.8 - Scanner"]
