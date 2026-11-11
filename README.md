@@ -1,4 +1,8 @@
+<div align="center">
+
 # AI SOC Log Analyzer
+
+</div>
 
 <div align="center">
 
@@ -10,6 +14,8 @@
 </div>
 
 Analizador de logs para un SOC que detecta patrones sospechosos, consulta un LLM para clasificar amenazas y ejecuta respuestas de firewall con rollback automático por TTL.
+
+---
 
 ## Arquitectura
 
@@ -28,6 +34,8 @@ flowchart LR
 
 La separación entre recolección, análisis y ejecución mantiene el flujo fácil de probar sin introducir agentes autónomos ni una capa de orquestación innecesaria.
 
+---
+
 ## Características
 
 - Monitorización de logs tipo syslog, SSH, Apache y Nginx.
@@ -42,11 +50,15 @@ La separación entre recolección, análisis y ejecución mantiene el flujo fác
 >
 > ![Captura de ataques reales en Azure](threat_intel_screenshot.png)
 
+---
+
 ## Requisitos
 
 - Python 3.10 o superior.
 - Una clave `GROQ_API_KEY`.
 - Permisos suficientes para modificar el firewall.
+
+---
 
 ## Instalación local
 
@@ -68,6 +80,8 @@ export GROQ_API_KEY="TU_API_KEY"
 
 Añade las IP protegidas a `whitelist.txt`, una por línea.
 
+---
+
 ## Uso
 
 ```bash
@@ -88,6 +102,8 @@ Argumentos:
 
 El modelo usado es fijo: `openai/gpt-oss-20b`. Ollama y LangGraph no forman parte del runtime.
 
+---
+
 ## Docker
 
 Construye la imagen:
@@ -105,6 +121,8 @@ docker run --privileged --network host \
   -v "$(pwd)/threat_intel.db:/app/threat_intel.db" \
   ai-soc --log /app/auth.log --whitelist /app/whitelist.txt
 ```
+
+---
 
 ## Desarrollo y pruebas
 
