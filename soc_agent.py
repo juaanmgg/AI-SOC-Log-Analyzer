@@ -8,7 +8,7 @@ import subprocess
 import threading
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import requests
 from langchain_core.output_parsers import JsonOutputParser
@@ -22,7 +22,7 @@ SEVERIDADES_VALIDAS = {"Baja", "Media", "Alta", "Crítica"}
 
 
 def ahora_utc():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ==========================================
@@ -329,49 +329,48 @@ def iniciar_soc(args, es_windows):
     ).start()
 
     print(f"[*] Vigilando '{args.log}'. Motor: Groq/openai/gpt-oss-20b. TTL: {args.ban_time}h")
-    with open(args.log) as archivo:
-        archivo.seek(0, 2)
-        eventos_recientes = deque()
-        alertas_emitidas = {}
-        tiempo_ultimo_analisis = time.monotonic()
-        identidad_archivo = (os.fstat(archivo.fileno()).st_dev, os.fstat(archivo.fileno()).st_ino)
+    eventos_recientes = deque()
+    alertas_emitidas = {}
+    tiempo_ultimo_analisis = time.monotonic()
 
-        try:
-            while True:
-                linea = archivo.readline()
-                ahora = time.monotonic()
-                if linea:
-                    eventos_recientes.append((ahora, linea))
+    try:
+        while True:
+            with open(args.log) as archivo:
+                archivo.seek(0, 2)
+                identidad_archivo = (os.fstat(archivo.fileno()).st_dev, os.fstat(archivo.fileno()).st_ino)
 
-                while eventos_recientes and ahora - eventos_recientes[0][0] > args.window_seconds:
-                    eventos_recientes.popleft()
+                while True:
+                    linea = archivo.readline()
+                    ahora = time.monotonic()
+                    if linea:
+                        eventos_recientes.append((ahora, linea))
 
-                if ahora - tiempo_ultimo_analisis >= 10 and eventos_recientes:
-                    datos = recolectar_logs(linea for _, linea in eventos_recientes)
-                    ips_criticas = {}
-                    for ip, logs in datos.items():
-                        ultima_alerta = alertas_emitidas.get(ip, 0)
-                        if len(logs) >= args.threshold and ahora - ultima_alerta >= args.window_seconds:
-                            ips_criticas[ip] = logs
-                            alertas_emitidas[ip] = ahora
-                    if ips_criticas:
-                        analyzer.procesar(ips_criticas)
-                    tiempo_ultimo_analisis = ahora
+                    while eventos_recientes and ahora - eventos_recientes[0][0] > args.window_seconds:
+                        eventos_recientes.popleft()
 
-                nueva_identidad = (os.stat(args.log).st_dev, os.stat(args.log).st_ino)
-                if nueva_identidad != identidad_archivo:
-                    archivo.close()
-                    archivo = open(args.log)
-                    archivo.seek(0, 2)
-                    identidad_archivo = nueva_identidad
-                    eventos_recientes.clear()
-                    alertas_emitidas.clear()
+                    if ahora - tiempo_ultimo_analisis >= 10 and eventos_recientes:
+                        datos = recolectar_logs(linea for _, linea in eventos_recientes)
+                        ips_criticas = {}
+                        for ip, logs in datos.items():
+                            ultima_alerta = alertas_emitidas.get(ip, 0)
+                            if len(logs) >= args.threshold and ahora - ultima_alerta >= args.window_seconds:
+                                ips_criticas[ip] = logs
+                                alertas_emitidas[ip] = ahora
+                        if ips_criticas:
+                            analyzer.procesar(ips_criticas)
+                        tiempo_ultimo_analisis = ahora
 
-                if not linea:
-                    time.sleep(1)
-        except KeyboardInterrupt:
-            rollback_stop.set()
-            print("\n[*] SOC desconectado.")
+                    nueva_identidad = (os.stat(args.log).st_dev, os.stat(args.log).st_ino)
+                    if nueva_identidad != identidad_archivo:
+                        eventos_recientes.clear()
+                        alertas_emitidas.clear()
+                        break
+
+                    if not linea:
+                        time.sleep(1)
+    except KeyboardInterrupt:
+        rollback_stop.set()
+        print("\n[*] SOC desconectado.")
 
 
 if __name__ == "__main__":
