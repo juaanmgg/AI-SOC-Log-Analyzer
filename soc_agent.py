@@ -8,7 +8,7 @@ import subprocess
 import threading
 import time
 from collections import defaultdict, deque
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 from langchain_core.output_parsers import JsonOutputParser
@@ -19,10 +19,11 @@ LOGGER = logging.getLogger(__name__)
 PALABRAS_CLAVE = re.compile(r"(?i)(failed|invalid|error|unauthorized|denied|403|404)")
 REGEX_IP = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 SEVERIDADES_VALIDAS = {"Baja", "Media", "Alta", "Crítica"}
+UTC_TZ = timezone.utc  # noqa: UP017
 
 
 def ahora_utc():
-    return datetime.now(UTC)
+    return datetime.now(UTC_TZ)
 
 
 # ==========================================
