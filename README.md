@@ -141,10 +141,14 @@ docker run --privileged --network host \
 
 ```bash
 ruff check .
-pytest test_soc_agent.py
+pytest
+mypy src/ai_soc
 ```
 
 Las pruebas mockean el LLM, la geolocalización y los comandos de firewall; no necesitan una API key ni modificar el firewall real.
+
+La arquitectura modular y los contratos de datos se describen en
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Controles de seguridad implementados
 

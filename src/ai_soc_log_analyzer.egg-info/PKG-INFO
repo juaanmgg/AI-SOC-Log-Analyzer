@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: ai-soc-log-analyzer
+Version: 0.1.0
+Requires-Python: >=3.10
+License-File: LICENSE
+Requires-Dist: langchain-core>=0.3.0
+Requires-Dist: langchain-groq==0.2.1
+Requires-Dist: pydantic>=2.0
+Requires-Dist: requests==2.32.3
+Dynamic: license-file
