@@ -6,12 +6,37 @@ migración.
 
 ```mermaid
 flowchart LR
-    Logs[Archivo de logs] --> Services[Servicios]
-    Services --> Domain[Modelos de dominio]
-    Services --> Firewall[FirewallAdapter]
-    Services --> Database[Adaptador SQLite]
+    Logs[LogTailer] --> Analyzer[SOCAnalyzer]
+    Analyzer --> Sanitizer[LogSanitizer]
+    Analyzer --> LLM[GroqThreatDetector]
+    Analyzer --> Fallback[HeuristicFallbackAnalyzer]
+    Analyzer --> Domain[Modelos de dominio]
+    Analyzer --> Firewall[FirewallAdapter]
+    Analyzer --> Database[DatabaseManager]
+    Analyzer --> GeoIP[HTTPXGeoIPAdapter]
     Firewall --> UFW[UfwAdapter]
     Firewall --> Netsh[NetshAdapter]
+    Rollback[RollbackWorker] --> Database
+    Rollback --> Firewall
+```
+
+Árbol modular relevante:
+
+```text
+src/ai_soc/
+├── domain/models.py
+├── adapters/
+│   ├── database.py
+│   ├── geo.py
+│   ├── llm.py
+│   └── firewall/{base,ufw,netsh}.py
+├── common/logging.py
+└── services/
+    ├── analyzer.py
+    ├── heuristic.py
+    ├── rollback.py
+    ├── sanitizer.py
+    └── tailer.py
 ```
 
 ## Capas
@@ -20,7 +45,12 @@ flowchart LR
   conoce infraestructura.
 - **Adaptadores** (`src/ai_soc/adapters`): SQLite y comandos de firewall,
   aislando efectos externos.
-- **Servicios** (`src/ai_soc/services`): casos de uso y orquestación.
+- **Servicios** (`src/ai_soc/services`): `SOCAnalyzer` coordina la
+  sanitización (`LogSanitizer`), la detección estructurada
+  (`GroqThreatDetector`) y `HeuristicFallbackAnalyzer`; `LogTailer` y
+  `RollbackWorker` aíslan los bucles de I/O y rollback.
+- **GeoIP** (`src/ai_soc/adapters/geo.py`): `HTTPXGeoIPAdapter` usa HTTPS,
+  timeout, reintentos y caché con TTL.
 - **Compatibilidad** (`soc_agent.py`): API existente y CLI hasta completar la
   migración.
 

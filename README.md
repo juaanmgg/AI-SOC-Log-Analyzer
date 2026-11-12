@@ -67,7 +67,7 @@ git clone https://github.com/juaanmgg/AI-SOC-Log-Analyzer.git
 cd AI-SOC-Log-Analyzer
 python -m venv venv
 source venv/bin/activate  # En Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 Configura la clave:
@@ -85,7 +85,7 @@ Añade las IP protegidas a `whitelist.txt`, una por línea.
 ## Uso
 
 ```bash
-python soc_agent.py \
+python -m ai_soc.cli \
   --log /var/log/auth.log \
   --threshold 3 \
   --window-seconds 60 \
@@ -97,7 +97,7 @@ Por seguridad, el programa funciona en modo simulación por defecto. Para permit
 modificaciones del firewall hay que añadir explícitamente `--auto-block`:
 
 ```bash
-python soc_agent.py --log /var/log/auth.log --auto-block
+python -m ai_soc.cli --log /var/log/auth.log --auto-block
 ```
 
 `--dry-run` fuerza la simulación y evita tanto el firewall como las consultas de geolocalización.
@@ -112,6 +112,10 @@ Argumentos:
 - `--groq-key`: clave Groq; si no se proporciona, se usa `GROQ_API_KEY`.
 - `--auto-block`: permite aplicar bloqueos reales; está desactivado por defecto.
 - `--dry-run`: muestra las acciones sin ejecutarlas.
+- `--json-logs`: emite los registros en formato JSON estructurado.
+
+`soc_agent.py` permanece disponible como shim de compatibilidad para consumidores
+existentes; las nuevas instalaciones deben usar `python -m ai_soc.cli`.
 
 El modelo usado es fijo: `openai/gpt-oss-20b`. Ollama y LangGraph no forman parte del runtime.
 
