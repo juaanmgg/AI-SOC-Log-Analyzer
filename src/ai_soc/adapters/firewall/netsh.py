@@ -39,13 +39,20 @@ class NetshAdapter(FirewallAdapter):
         if not self._valid_ip(ip):
             return False
         return self._run(
-            ["netsh", "advfirewall", "firewall", "add", "rule",
-             f"name=SOC_{ip}", "dir=in", "action=block", f"remoteip={ip}"]
+            [
+                "netsh",
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                f"name=SOC_{ip}",
+                "dir=in",
+                "action=block",
+                f"remoteip={ip}",
+            ]
         )
 
     def unblock_ip(self, ip: str) -> bool:
         if not self._valid_ip(ip):
             return False
-        return self._run(
-            ["netsh", "advfirewall", "firewall", "delete", "rule", f"name=SOC_{ip}"]
-        )
+        return self._run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name=SOC_{ip}"])

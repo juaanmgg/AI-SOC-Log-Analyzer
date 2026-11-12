@@ -19,7 +19,7 @@ def test_extraccion_ips_y_ruido_avanzado():
         "Oct 22 10:12:32 Failed password for root from 203.0.113.45 port 54321 ssh2",
         "Oct 22 10:15:02 Invalid user test from 198.51.100.22 port 49111",
         "nginx: 192.168.1.50 - - [error] 403 Forbidden access",
-        "Successful login for admin from 10.0.0.1"  # Ruido normal, debe ignorarse
+        "Successful login for admin from 10.0.0.1",  # Ruido normal, debe ignorarse
     ]
     resultado = recolectar_logs(logs)
 
@@ -78,8 +78,10 @@ def test_geolocalizacion_api_mock(mock_get):
 
     # Usamos un modelo LLM falso para que LangChain pueda construir su cadena sin errores
     fake_llm = FakeListChatModel(responses=['{"amenazas": []}'])
-    
-    analyzer = SOCAnalyzer(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=True, ban_time=24)
+
+    analyzer = SOCAnalyzer(
+        llm=fake_llm, db_manager=None, whitelist=set(), es_windows=True, ban_time=24
+    )
     pais = analyzer._obtener_geolocalizacion("8.8.8.8")
 
     assert pais == "Japón"
@@ -90,14 +92,27 @@ def test_geolocalizacion_api_mock(mock_get):
 def test_ejecucion_comandos_firewall(mock_subprocess):
     """Asegura que el orquestador genere los binarios correctos de Windows y Linux sin ejecutarlos."""
     fake_llm = FakeListChatModel(responses=['{"amenazas": []}'])
-    
-    analyzer_win = SOCAnalyzer(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=True, ban_time=24)
-    analyzer_lin = SOCAnalyzer(llm=fake_llm, db_manager=None, whitelist=set(), es_windows=False, ban_time=24)
+
+    analyzer_win = SOCAnalyzer(
+        llm=fake_llm, db_manager=None, whitelist=set(), es_windows=True, ban_time=24
+    )
+    analyzer_lin = SOCAnalyzer(
+        llm=fake_llm, db_manager=None, whitelist=set(), es_windows=False, ban_time=24
+    )
 
     analyzer_win._ejecutar_bloqueo("5.5.5.5")
     mock_subprocess.assert_called_with(
-        ["netsh", "advfirewall", "firewall", "add", "rule", "name=SOC_5.5.5.5",
-         "dir=in", "action=block", "remoteip=5.5.5.5"],
+        [
+            "netsh",
+            "advfirewall",
+            "firewall",
+            "add",
+            "rule",
+            "name=SOC_5.5.5.5",
+            "dir=in",
+            "action=block",
+            "remoteip=5.5.5.5",
+        ],
         check=True,
         shell=False,
         stdout=subprocess.DEVNULL,
@@ -127,9 +142,10 @@ def test_pipeline_analiza_y_ejecuta_en_orden():
         auto_block=True,
     )
 
-    with patch.object(analyzer, "_obtener_geolocalizacion", return_value="ES"), patch.object(
-        analyzer, "_ejecutar_bloqueo"
-    ) as bloquear:
+    with (
+        patch.object(analyzer, "_obtener_geolocalizacion", return_value="ES"),
+        patch.object(analyzer, "_ejecutar_bloqueo") as bloquear,
+    ):
         resultado = analyzer.procesar({"5.5.5.5": ["Failed password from 5.5.5.5"]})
 
     bloquear.assert_called_once_with("5.5.5.5")
@@ -184,9 +200,7 @@ def test_modo_simulacion_no_ejecuta_firewall():
     )
 
     with patch.object(analyzer, "_ejecutar_bloqueo") as bloquear:
-        resultado = analyzer.ejecutar(
-            [{"ip": "8.8.8.8", "tipo": "Scanner", "severidad": "Media"}]
-        )
+        resultado = analyzer.ejecutar([{"ip": "8.8.8.8", "tipo": "Scanner", "severidad": "Media"}])
 
     bloquear.assert_not_called()
     analyzer.db.registrar_amenaza.assert_not_called()

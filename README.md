@@ -141,6 +141,7 @@ docker run --privileged --network host \
 
 ```bash
 ruff check .
+ruff format --check .
 pytest
 mypy src/ai_soc
 ```
@@ -149,6 +150,12 @@ Las pruebas mockean el LLM, la geolocalización y los comandos de firewall; no n
 
 La arquitectura modular y los contratos de datos se describen en
 [ARCHITECTURE.md](ARCHITECTURE.md).
+
+La CLI modular admite logging estructurado:
+
+```bash
+python -m ai_soc.cli --log /var/log/auth.log --json-logs --dry-run
+```
 
 ## Controles de seguridad implementados
 

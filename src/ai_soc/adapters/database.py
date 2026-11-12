@@ -1,6 +1,8 @@
 """Persistencia SQLite de amenazas."""
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 
@@ -11,20 +13,33 @@ class DatabaseManager:
         self.db_path = db_path
         self._inicializar_db()
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        try:
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def _inicializar_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS amenazas
                 (id INTEGER PRIMARY KEY, fecha TEXT, ip TEXT, pais TEXT,
                  tipo TEXT, severidad TEXT, expira_en TEXT, activo INTEGER)"""
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_amenazas_expiracion "
-                "ON amenazas (activo, expira_en)"
+                "CREATE INDEX IF NOT EXISTS idx_amenazas_expiracion ON amenazas (activo, expira_en)"
             )
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_amenazas_ip_activa "
-                "ON amenazas (ip, activo)"
+                "CREATE INDEX IF NOT EXISTS idx_amenazas_ip_activa ON amenazas (ip, activo)"
             )
 
     @staticmethod
@@ -36,7 +51,7 @@ class DatabaseManager:
     ) -> None:
         fecha = self._ahora_utc()
         expiracion = fecha + timedelta(hours=ban_time_hours)
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             actualizado = conn.execute(
                 """UPDATE amenazas SET fecha = ?, pais = ?, tipo = ?, severidad = ?,
                 expira_en = ?, activo = 1 WHERE ip = ? AND activo = 1""",
@@ -52,7 +67,7 @@ class DatabaseManager:
 
     def obtener_ips_expiradas(self) -> list[str]:
         ahora = self._ahora_utc().isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             cursor = conn.execute(
                 """SELECT DISTINCT amenaza.ip FROM amenazas AS amenaza
                 WHERE amenaza.activo = 1 AND amenaza.expira_en <= ?
@@ -66,9 +81,8 @@ class DatabaseManager:
             return [fila[0] for fila in cursor.fetchall()]
 
     def marcar_desbloqueada(self, ip: str) -> None:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connection() as conn:
             conn.execute(
-                "UPDATE amenazas SET activo = 0 "
-                "WHERE ip = ? AND activo = 1 AND expira_en <= ?",
+                "UPDATE amenazas SET activo = 0 WHERE ip = ? AND activo = 1 AND expira_en <= ?",
                 (ip, self._ahora_utc().isoformat()),
             )

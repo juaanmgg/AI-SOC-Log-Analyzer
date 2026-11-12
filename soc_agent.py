@@ -36,11 +36,15 @@ class DatabaseManager:
 
     def _inicializar_db(self):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute('''CREATE TABLE IF NOT EXISTS amenazas
+            conn.execute("""CREATE TABLE IF NOT EXISTS amenazas
                             (id INTEGER PRIMARY KEY, fecha TEXT, ip TEXT, pais TEXT, 
-                             tipo TEXT, severidad TEXT, expira_en TEXT, activo INTEGER)''')
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_amenazas_expiracion ON amenazas (activo, expira_en)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_amenazas_ip_activa ON amenazas (ip, activo)")
+                             tipo TEXT, severidad TEXT, expira_en TEXT, activo INTEGER)""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_amenazas_expiracion ON amenazas (activo, expira_en)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_amenazas_ip_activa ON amenazas (ip, activo)"
+            )
 
     def registrar_amenaza(self, ip, pais, tipo, severidad, ban_time_hours):
         fecha = ahora_utc()
@@ -94,7 +98,9 @@ class DatabaseManager:
 # PIPELINE DE ANÁLISIS Y RESPUESTA
 # ==========================================
 class SOCAnalyzer:
-    def __init__(self, llm, db_manager, whitelist, es_windows, ban_time, auto_block=False, dry_run=False):
+    def __init__(
+        self, llm, db_manager, whitelist, es_windows, ban_time, auto_block=False, dry_run=False
+    ):
         self.llm = llm
         self.db = db_manager
         self.whitelist = whitelist
@@ -185,7 +191,10 @@ class SOCAnalyzer:
 
             self.db.registrar_amenaza(ip, pais, tipo, sev, self.ban_time)
             acciones.append(f"Bloqueada: {ip} ({pais}) - {tipo}")
-            print(f"  [+] ACCIÓN TÁCTICA: Bloqueada {ip} | País: {pais} | TTL: {self.ban_time}h")
+            LOGGER.info(
+                "Acción táctica: IP bloqueada",
+                extra={"ip": ip, "country": pais, "ttl_hours": self.ban_time},
+            )
 
         return {"acciones_ejecutadas": acciones}
 
@@ -201,7 +210,11 @@ class SOCAnalyzer:
         try:
             r = requests.get(f"http://ip-api.com/json/{ip}?fields=country", timeout=3)
             payload = r.json() if r.status_code == 200 else {}
-            pais = payload.get("country", "Desconocido") if isinstance(payload, dict) else "Desconocido"
+            pais = (
+                payload.get("country", "Desconocido")
+                if isinstance(payload, dict)
+                else "Desconocido"
+            )
         except (requests.RequestException, ValueError):
             LOGGER.warning("No se pudo geolocalizar %s", ip)
             pais = "Desconocido"
@@ -210,8 +223,17 @@ class SOCAnalyzer:
 
     def _ejecutar_bloqueo(self, ip):
         cmd = (
-            ["netsh", "advfirewall", "firewall", "add", "rule", f"name=SOC_{ip}",
-             "dir=in", "action=block", f"remoteip={ip}"]
+            [
+                "netsh",
+                "advfirewall",
+                "firewall",
+                "add",
+                "rule",
+                f"name=SOC_{ip}",
+                "dir=in",
+                "action=block",
+                f"remoteip={ip}",
+            ]
             if self.es_windows
             else ["ufw", "deny", "from", ip, "to", "any"]
         )
@@ -274,7 +296,7 @@ def hilo_rollback(db: DatabaseManager, es_windows: bool, stop_event=None, interv
                 LOGGER.exception("No se pudo ejecutar el rollback de firewall para %s", ip)
                 continue
             db.marcar_desbloqueada(ip)
-            print(f"  [~] ROLLBACK: IP {ip} desbloqueada (TTL expirado).")
+            LOGGER.info("Rollback: IP desbloqueada", extra={"ip": ip, "reason": "ttl_expired"})
         stop_event.wait(intervalo)
 
 
@@ -329,7 +351,10 @@ def iniciar_soc(args, es_windows):
         daemon=True,
     ).start()
 
-    print(f"[*] Vigilando '{args.log}'. Motor: Groq/openai/gpt-oss-20b. TTL: {args.ban_time}h")
+    LOGGER.info(
+        "Vigilando archivo de logs",
+        extra={"path": args.log, "model": "openai/gpt-oss-20b", "ttl_hours": args.ban_time},
+    )
     eventos_recientes = deque()
     alertas_emitidas = {}
     tiempo_ultimo_analisis = time.monotonic()
@@ -338,7 +363,10 @@ def iniciar_soc(args, es_windows):
         while True:
             with open(args.log) as archivo:
                 archivo.seek(0, 2)
-                identidad_archivo = (os.fstat(archivo.fileno()).st_dev, os.fstat(archivo.fileno()).st_ino)
+                identidad_archivo = (
+                    os.fstat(archivo.fileno()).st_dev,
+                    os.fstat(archivo.fileno()).st_ino,
+                )
 
                 while True:
                     linea = archivo.readline()
@@ -346,7 +374,9 @@ def iniciar_soc(args, es_windows):
                     if linea:
                         eventos_recientes.append((ahora, linea))
 
-                    while eventos_recientes and ahora - eventos_recientes[0][0] > args.window_seconds:
+                    while (
+                        eventos_recientes and ahora - eventos_recientes[0][0] > args.window_seconds
+                    ):
                         eventos_recientes.popleft()
 
                     if ahora - tiempo_ultimo_analisis >= 10 and eventos_recientes:
@@ -354,7 +384,10 @@ def iniciar_soc(args, es_windows):
                         ips_criticas = {}
                         for ip, logs in datos.items():
                             ultima_alerta = alertas_emitidas.get(ip, 0)
-                            if len(logs) >= args.threshold and ahora - ultima_alerta >= args.window_seconds:
+                            if (
+                                len(logs) >= args.threshold
+                                and ahora - ultima_alerta >= args.window_seconds
+                            ):
                                 ips_criticas[ip] = logs
                                 alertas_emitidas[ip] = ahora
                         if ips_criticas:
@@ -371,7 +404,7 @@ def iniciar_soc(args, es_windows):
                         time.sleep(1)
     except KeyboardInterrupt:
         rollback_stop.set()
-        print("\n[*] SOC desconectado.")
+        LOGGER.info("SOC desconectado")
 
 
 if __name__ == "__main__":
@@ -379,8 +412,12 @@ if __name__ == "__main__":
     parser.add_argument("--log", type=str, required=True, help="Ruta al log")
     parser.add_argument("--threshold", type=entero_positivo, default=3, help="Eventos mínimos")
     parser.add_argument("--groq-key", type=str, default=os.getenv("GROQ_API_KEY"))
-    parser.add_argument("--whitelist", type=str, default="whitelist.txt", help="Archivo de IPs exentas")
-    parser.add_argument("--ban-time", type=entero_positivo, default=24, help="Horas de bloqueo (TTL)")
+    parser.add_argument(
+        "--whitelist", type=str, default="whitelist.txt", help="Archivo de IPs exentas"
+    )
+    parser.add_argument(
+        "--ban-time", type=entero_positivo, default=24, help="Horas de bloqueo (TTL)"
+    )
     parser.add_argument(
         "--window-seconds",
         type=entero_positivo,
