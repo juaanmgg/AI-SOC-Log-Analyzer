@@ -128,7 +128,7 @@ docker build -t ai-soc .
 Ejecuta el analizador pasando la clave sin incluirla en la imagen:
 
 ```bash
-docker run --privileged --network host \
+docker run --cap-drop=ALL --cap-add=NET_ADMIN --network host \
   -e GROQ_API_KEY="TU_API_KEY" \
   -v /var/log/auth.log:/app/auth.log:ro \
   -v "$(pwd)/threat_intel.db:/app/threat_intel.db" \
@@ -160,6 +160,10 @@ python -m ai_soc.cli --log /var/log/auth.log --json-logs --dry-run
 ## Controles de seguridad implementados
 
 - Las respuestas del LLM se validan antes de poder generar una acción.
+- Los logs se sanitizan, agregan y delimitan como evidencia no confiable antes de
+  enviarse al LLM; las instrucciones encontradas en ellos se ignoran.
+- La inferencia usa `ThreatReport` estructurado y activa un fallback heurístico
+  local ante errores transitorios, cuotas excedidas o indisponibilidad del LLM.
 - Las IP se comprueban con `ipaddress`, no solo mediante expresiones regulares.
 - Los comandos del firewall se ejecutan sin `shell=True`.
 - Una IP con un bloqueo vigente no se desbloquea por la expiración de un registro antiguo.

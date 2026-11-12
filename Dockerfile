@@ -5,6 +5,7 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+# Ejecutar con --cap-drop=ALL --cap-add=NET_ADMIN para aplicar mínimo privilegio.
 # Instalar UFW para el firewall de Linux
 RUN apt-get update && apt-get install -y ufw iproute2 && rm -rf /var/lib/apt/lists/*
 

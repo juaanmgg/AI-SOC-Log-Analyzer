@@ -7,14 +7,15 @@ import time
 from collections import defaultdict, deque
 from collections.abc import Iterable
 
-from langchain_groq import ChatGroq
-
 from ai_soc.adapters.database import DatabaseManager
 from ai_soc.adapters.firewall import NetshAdapter, UfwAdapter
 from ai_soc.adapters.geo import HTTPXGeoIPAdapter
+from ai_soc.adapters.llm import GroqThreatDetector
 from ai_soc.common.logging import setup_logging
-from ai_soc.services.analyzer import AnalyzerService
+from ai_soc.services.analyzer import SOCAnalyzer
+from ai_soc.services.heuristic import HeuristicFallbackAnalyzer
 from ai_soc.services.rollback import RollbackWorker
+from ai_soc.services.sanitizer import LogSanitizer
 from ai_soc.services.tailer import LogTailer
 
 LOGGER = logging.getLogger(__name__)
@@ -61,16 +62,16 @@ def main(argv: list[str] | None = None) -> int:
     database = DatabaseManager()
     firewall = NetshAdapter() if os.name == "nt" else UfwAdapter()
     geoip = HTTPXGeoIPAdapter()
-    llm = ChatGroq(  # type: ignore[call-arg]
-        model="openai/gpt-oss-20b", groq_api_key=args.groq_key, temperature=0
-    )
+    detector = GroqThreatDetector(args.groq_key)
     whitelist = {"127.0.0.1", "localhost"}
     if os.path.exists(args.whitelist):
         with open(args.whitelist, encoding="utf-8") as file:
             whitelist.update(line.strip() for line in file if line.strip())
 
-    analyzer = AnalyzerService(
-        llm,
+    analyzer = SOCAnalyzer(
+        detector,
+        HeuristicFallbackAnalyzer(args.threshold),
+        LogSanitizer(),
         database,
         firewall,
         geoip,

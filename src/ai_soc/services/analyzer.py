@@ -1,28 +1,31 @@
-"""Servicio de análisis y respuesta táctica."""
+"""Orquestación del análisis LLM y su fallback heurístico."""
 
 import ipaddress
 import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.prompts import PromptTemplate
 from pydantic import ValidationError
 
 from ai_soc.adapters.database import DatabaseManager
 from ai_soc.adapters.firewall.base import FirewallAdapter
 from ai_soc.adapters.geo import GeoIPProvider
+from ai_soc.adapters.llm import GroqThreatDetector
 from ai_soc.domain.models import SeverityEnum, ThreatItem, ThreatReport
+from ai_soc.services.heuristic import HeuristicFallbackAnalyzer
+from ai_soc.services.sanitizer import LogSanitizer
 
 LOGGER = logging.getLogger(__name__)
 
 
-class AnalyzerService:
-    """Orquesta clasificación LLM, GeoIP, firewall y persistencia."""
+class SOCAnalyzer:
+    """Analiza evidencia con LLM y activa fallback ante fallos de inferencia."""
 
     def __init__(
         self,
-        llm: Any,
+        detector: GroqThreatDetector,
+        fallback: HeuristicFallbackAnalyzer,
+        sanitizer: LogSanitizer,
         database: DatabaseManager,
         firewall: FirewallAdapter,
         geoip: GeoIPProvider,
@@ -31,6 +34,9 @@ class AnalyzerService:
         auto_block: bool = False,
         dry_run: bool = False,
     ) -> None:
+        self.detector = detector
+        self.fallback = fallback
+        self.sanitizer = sanitizer
         self.database = database
         self.firewall = firewall
         self.geoip = geoip
@@ -38,29 +44,24 @@ class AnalyzerService:
         self.ban_time_hours = ban_time_hours
         self.auto_block = auto_block
         self.dry_run = dry_run
-        prompt = PromptTemplate(
-            template=(
-                "Analiza estos logs y devuelve únicamente JSON con la clave "
-                '"amenazas" y los campos ip, tipo y severidad:\n{logs}'
-            ),
-            input_variables=["logs"],
-        )
-        self._chain = prompt | llm | JsonOutputParser()
 
-    def analyze(self, raw_logs: Mapping[str, Sequence[str]]) -> list[ThreatItem]:
-        summary = "\n".join(
-            f"\n--- IP: {ip} ---\n" + "\n".join(lines[:10]) for ip, lines in raw_logs.items()
-        )
+    def analyze(self, raw_logs: Mapping[str, Sequence[str]]) -> ThreatReport:
+        """Sanitiza, agrega y clasifica logs con fallback resiliente."""
+        safe_logs = {ip: list(lines) for ip, lines in raw_logs.items()}
+        evidence = self.sanitizer.wrap_untrusted_content(safe_logs)
         try:
-            result = self._chain.invoke({"logs": summary})
-            report = ThreatReport(amenazas=normalize_threats(result))
-        except (TypeError, ValueError, ValidationError) as error:
-            raise RuntimeError("Respuesta inválida del LLM") from error
-        return report.amenazas
+            return self.detector.analyze(evidence)
+        except Exception as error:
+            LOGGER.warning(
+                "LLM inaccesible o cuota excedida. Activando motor heurístico de contingencia.",
+                extra={"error": str(error)},
+            )
+            return self.fallback.analyze(raw_logs)
 
     def process(self, raw_logs: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
+        """Procesa amenazas validadas y aplica la respuesta configurada."""
         actions: list[str] = []
-        for threat in self.analyze(raw_logs):
+        for threat in self.analyze(raw_logs).amenazas:
             ip = str(threat.ip)
             if ip in self.whitelist:
                 actions.append(f"Ignorada (Whitelist): {ip}")
@@ -69,6 +70,7 @@ class AnalyzerService:
                 actions.append(f"Simulada: {ip} - {threat.tipo}")
                 LOGGER.info("Acción simulada", extra={"ip": ip, "tipo": threat.tipo})
                 continue
+
             country = self.geoip.get_country(ip)
             if not self.firewall.block_ip(ip):
                 actions.append(f"Error de firewall: {ip}")
@@ -88,8 +90,11 @@ class AnalyzerService:
         return {"acciones_ejecutadas": actions}
 
 
+AnalyzerService = SOCAnalyzer
+
+
 def normalize_threats(result: Any) -> list[ThreatItem]:
-    """Normaliza respuestas parciales del LLM para compatibilidad de datos."""
+    """Normaliza respuestas parciales para consumidores legacy."""
     if not isinstance(result, dict):
         raise TypeError("La respuesta del LLM debe ser un objeto JSON")
     threats = result.get("amenazas", [])
