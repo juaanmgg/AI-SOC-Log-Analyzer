@@ -1,6 +1,13 @@
-venv/
-__pycache__/
+# Build & Packaging
+*.egg-info/
+build/
+dist/
+
+# Caches & Coverage
+.coverage
+.coverage.*
 .pytest_cache/
-threat_intel.db
-whitelist.txt
-.env
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
