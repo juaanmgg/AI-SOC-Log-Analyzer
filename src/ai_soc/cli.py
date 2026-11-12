@@ -3,9 +3,12 @@
 import argparse
 import logging
 import os
+import signal
 import time
 from collections import defaultdict, deque
 from collections.abc import Iterable
+from types import FrameType
+from typing import NoReturn, cast
 
 from ai_soc.adapters.database import DatabaseManager
 from ai_soc.adapters.firewall import NetshAdapter, UfwAdapter
@@ -19,6 +22,10 @@ from ai_soc.services.sanitizer import LogSanitizer
 from ai_soc.services.tailer import LogTailer
 
 LOGGER = logging.getLogger(__name__)
+
+
+class GracefulShutdown(Exception):
+    """Señal interna para salir del bucle principal con código cero."""
 
 
 def _positive_integer(value: str) -> int:
@@ -47,10 +54,43 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--whitelist", default="whitelist.txt")
     parser.add_argument("--ban-time", type=_positive_integer, default=24)
     parser.add_argument("--threshold", type=_positive_integer, default=3)
-    parser.add_argument("--auto-block", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--window-seconds", type=_positive_integer, default=60)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--auto-block", action="store_true")
+    mode.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-logs", action="store_true")
     return parser
+
+
+def _shutdown_handler(
+    signum: int,
+    _frame: FrameType | None,
+    worker: RollbackWorker,
+) -> NoReturn:
+    LOGGER.info(
+        "Apagado en progreso",
+        extra={"signal": signal.Signals(signum).name},
+    )
+    worker.stop()
+    raise GracefulShutdown
+
+
+def install_signal_handlers(worker: RollbackWorker) -> dict[signal.Signals, signal.Handlers]:
+    """Registra SIGINT/SIGTERM y devuelve los handlers anteriores."""
+    previous: dict[signal.Signals, signal.Handlers] = {}
+
+    def handler(signum: int, frame: FrameType | None) -> None:
+        _shutdown_handler(signum, frame, worker)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous[signum] = cast(signal.Handlers, signal.signal(signum, handler))
+    return previous
+
+
+def restore_signal_handlers(previous: dict[signal.Signals, signal.Handlers]) -> None:
+    """Restaura handlers previos al finalizar la CLI."""
+    for signum, handler in previous.items():
+        signal.signal(signum, handler)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,12 +125,13 @@ def main(argv: list[str] | None = None) -> int:
     recent: deque[tuple[float, str]] = deque()
     last_analysis = time.monotonic()
     rollback.start()
+    previous_handlers = install_signal_handlers(rollback)
     LOGGER.info("Vigilando archivo de logs", extra={"path": args.log})
     try:
         for line in tailer.follow():
             now = time.monotonic()
             recent.append((now, line))
-            while recent and now - recent[0][0] > 60:
+            while recent and now - recent[0][0] > args.window_seconds:
                 recent.popleft()
             if now - last_analysis >= 10:
                 grouped = _collect_logs(item for _, item in recent)
@@ -98,10 +139,11 @@ def main(argv: list[str] | None = None) -> int:
                 if grouped:
                     analyzer.process(grouped)
                 last_analysis = now
-    except KeyboardInterrupt:
+    except (GracefulShutdown, KeyboardInterrupt):
         LOGGER.info("SOC desconectado")
     finally:
         rollback.stop()
+        restore_signal_handlers(previous_handlers)
         geoip.close()
     return 0
 

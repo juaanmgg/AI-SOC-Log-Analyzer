@@ -144,9 +144,12 @@ ruff check .
 ruff format --check .
 pytest
 mypy src/ai_soc
+pip-audit -r requirements.txt
 ```
 
-Las pruebas mockean el LLM, la geolocalización y los comandos de firewall; no necesitan una API key ni modificar el firewall real.
+La suite exige una cobertura mínima del 80%. Las pruebas mockean el LLM, la
+geolocalización y los comandos de firewall; no necesitan una API key ni
+modificar el firewall real.
 
 La arquitectura modular y los contratos de datos se describen en
 [ARCHITECTURE.md](ARCHITECTURE.md).
